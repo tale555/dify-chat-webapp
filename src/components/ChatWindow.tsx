@@ -1,7 +1,17 @@
 import { useState, useEffect } from 'react';
 import MessageList from './MessageList';
 import MessageInput from './MessageInput';
+import ExportButton from './ExportButton';
 import { callDifyChatApi } from '../services/chatApi';
+import {
+  saveConversation,
+  getConversation,
+  getCurrentConversationId,
+  setCurrentConversationId,
+  generateConversationTitle,
+  createNewConversation,
+  type Conversation,
+} from '../services/conversationStorage';
 
 export interface Message {
   role: 'user' | 'assistant';
@@ -9,14 +19,33 @@ export interface Message {
   imageUrl?: string; // 画像のプレビューURL
 }
 
-function ChatWindow() {
+interface ChatWindowProps {
+  currentConversation: Conversation | null;
+  onConversationUpdate: (conversation: Conversation) => void;
+}
+
+function ChatWindow({ currentConversation, onConversationUpdate }: ChatWindowProps) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [conversationId, setConversationId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [currentConvId, setCurrentConvId] = useState<string | null>(null);
 
-  // 初期化時は会話を作成しない（Dify APIは会話IDを自動生成するため）
-  // 最初のメッセージ送信時に会話IDが返ってくる
+  // 会話が変更されたときにメッセージを読み込む
+  useEffect(() => {
+    if (currentConversation) {
+      setMessages(currentConversation.messages);
+      setConversationId(currentConversation.conversationId);
+      setCurrentConvId(currentConversation.id);
+      setCurrentConversationId(currentConversation.id);
+    } else {
+      // 新しい会話
+      setMessages([]);
+      setConversationId(null);
+      setCurrentConvId(null);
+      setCurrentConversationId(null);
+    }
+  }, [currentConversation]);
 
   const handleSendMessage = async (content: string, imageFile?: File) => {
     // 画像がある場合はプレビューURLを生成
@@ -30,19 +59,63 @@ function ChatWindow() {
       content: content || (imageFile ? '画像を分析してください' : ''),
       imageUrl: imageUrl
     };
-    setMessages((prev) => [...prev, userMessage]);
+    
+    const updatedMessages = [...messages, userMessage];
+    setMessages(updatedMessages);
     setError(null);
     setIsLoading(true);
 
     try {
       const result = await callDifyChatApi(content, 'web_user', conversationId || undefined, imageFile);
       const assistantMessage: Message = { role: 'assistant', content: result.answer };
-      setMessages((prev) => [...prev, assistantMessage]);
+      
+      const finalMessages = [...updatedMessages, assistantMessage];
+      setMessages(finalMessages);
       
       // 会話IDが返ってきたら保存（最初のメッセージで会話IDが生成される）
+      let finalConversationId = conversationId;
       if (result.conversationId && !conversationId) {
+        finalConversationId = result.conversationId;
         setConversationId(result.conversationId);
       }
+      
+      // 会話を保存
+      let conv: Conversation;
+      if (currentConvId) {
+        // 既存の会話を更新
+        const existingConv = getConversation(currentConvId);
+        if (existingConv) {
+          conv = {
+            ...existingConv,
+            messages: finalMessages,
+            conversationId: finalConversationId,
+            title: generateConversationTitle(finalMessages),
+            updatedAt: Date.now(),
+          };
+        } else {
+          // 会話が見つからない場合は新規作成
+          conv = {
+            ...createNewConversation(),
+            id: currentConvId,
+            messages: finalMessages,
+            conversationId: finalConversationId,
+            title: generateConversationTitle(finalMessages),
+          };
+        }
+      } else {
+        // 新しい会話を作成
+        conv = {
+          ...createNewConversation(),
+          messages: finalMessages,
+          conversationId: finalConversationId,
+          title: generateConversationTitle(finalMessages),
+        };
+        setCurrentConvId(conv.id);
+        setCurrentConversationId(conv.id);
+      }
+      
+      saveConversation(conv);
+      onConversationUpdate(conv);
     } catch (error) {
       console.error('Failed to get response:', error);
       const errorMessage = error instanceof Error ? error.message : '申し訳ございません。エラーが発生しました。';
@@ -51,7 +124,152 @@ function ChatWindow() {
         role: 'assistant',
         content: `エラー: ${errorMessage}`
       };
-      setMessages((prev) => [...prev, assistantMessage]);
+      const finalMessages = [...updatedMessages, assistantMessage];
+      setMessages(finalMessages);
+      
+      // エラーが発生しても会話を保存（エラーメッセージも含む）
+      let conv: Conversation;
+      if (currentConvId) {
+        const existingConv = getConversation(currentConvId);
+        if (existingConv) {
+          conv = {
+            ...existingConv,
+            messages: finalMessages,
+            updatedAt: Date.now(),
+          };
+        } else {
+          // 会話が見つからない場合は新規作成
+          conv = {
+            ...createNewConversation(),
+            id: currentConvId,
+            messages: finalMessages,
+            title: generateConversationTitle(finalMessages),
+          };
+        }
+      } else {
+        // 新しい会話を作成
+        conv = {
+          ...createNewConversation(),
+          messages: finalMessages,
+          title: generateConversationTitle(finalMessages),
+        };
+        setCurrentConvId(conv.id);
+        setCurrentConversationId(conv.id);
+      }
+      
+      saveConversation(conv);
+      onConversationUpdate(conv);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleCopyMessage = (message: Message) => {
+    navigator.clipboard.writeText(message.content).then(() => {
+      // コピー成功のフィードバック（オプション）
+      console.log('メッセージをコピーしました');
+    }).catch((err) => {
+      console.error('コピーに失敗しました:', err);
+    });
+  };
+
+  const handleEditMessage = (messageIndex: number, newContent: string) => {
+    const updatedMessages = [...messages];
+    updatedMessages[messageIndex] = {
+      ...updatedMessages[messageIndex],
+      content: newContent,
+    };
+    setMessages(updatedMessages);
+
+    // 会話を保存
+    if (currentConvId) {
+      const existingConv = getConversation(currentConvId);
+      if (existingConv) {
+        const conv = {
+          ...existingConv,
+          messages: updatedMessages,
+          updatedAt: Date.now(),
+        };
+        saveConversation(conv);
+        onConversationUpdate(conv);
+      }
+    }
+  };
+
+  const handleDeleteMessage = (messageIndex: number) => {
+    const updatedMessages = messages.filter((_, index) => index !== messageIndex);
+    setMessages(updatedMessages);
+
+    // 会話を保存
+    if (currentConvId) {
+      const existingConv = getConversation(currentConvId);
+      if (existingConv) {
+        const conv = {
+          ...existingConv,
+          messages: updatedMessages,
+          title: generateConversationTitle(updatedMessages),
+          updatedAt: Date.now(),
+        };
+        saveConversation(conv);
+        onConversationUpdate(conv);
+      }
+    }
+  };
+
+  const handleRegenerateMessage = async (messageIndex: number) => {
+    // 再生成するメッセージより前のメッセージを取得
+    const messagesBefore = messages.slice(0, messageIndex);
+    
+    // 最後のユーザーメッセージを取得
+    const lastUserMessage = [...messagesBefore].reverse().find(m => m.role === 'user');
+    if (!lastUserMessage) {
+      return;
+    }
+
+    // 再生成するメッセージ以降を削除
+    const updatedMessages = messagesBefore;
+    setMessages(updatedMessages);
+    setIsLoading(true);
+    setError(null);
+
+    try {
+      // 最後のユーザーメッセージを再送信
+      const result = await callDifyChatApi(
+        lastUserMessage.content,
+        'web_user',
+        conversationId || undefined,
+        undefined // 画像は再送信しない
+      );
+      
+      const assistantMessage: Message = { role: 'assistant', content: result.answer };
+      const finalMessages = [...updatedMessages, assistantMessage];
+      setMessages(finalMessages);
+
+      // 会話IDが返ってきたら保存
+      let finalConversationId = conversationId;
+      if (result.conversationId && !conversationId) {
+        finalConversationId = result.conversationId;
+        setConversationId(result.conversationId);
+      }
+
+      // 会話を保存
+      if (currentConvId) {
+        const existingConv = getConversation(currentConvId);
+        if (existingConv) {
+          const conv = {
+            ...existingConv,
+            messages: finalMessages,
+            conversationId: finalConversationId,
+            updatedAt: Date.now(),
+          };
+          saveConversation(conv);
+          onConversationUpdate(conv);
+        }
+      }
+    } catch (error) {
+      console.error('再生成に失敗しました:', error);
+      const errorMessage = error instanceof Error ? error.message : '申し訳ございません。エラーが発生しました。';
+      setError(errorMessage);
     } finally {
       setIsLoading(false);
     }
@@ -59,6 +277,13 @@ function ChatWindow() {
 
   return (
     <div className="flex-1 flex flex-col bg-white shadow-lg overflow-hidden">
+      {/* エクスポートボタン */}
+      {currentConversation && messages.length > 0 && (
+        <div className="px-4 py-2 border-b border-slate-200 flex justify-end">
+          <ExportButton conversation={currentConversation} />
+        </div>
+      )}
+      
       {error && (
         <div className="bg-red-50 border-l-4 border-red-400 p-4 mx-4 mt-4 rounded">
           <div className="flex items-start">
@@ -86,7 +311,14 @@ function ChatWindow() {
           </div>
         </div>
       )}
-      <MessageList messages={messages} isLoading={isLoading} />
+      <MessageList
+        messages={messages}
+        isLoading={isLoading}
+        onCopyMessage={handleCopyMessage}
+        onEditMessage={handleEditMessage}
+        onDeleteMessage={handleDeleteMessage}
+        onRegenerateMessage={handleRegenerateMessage}
+      />
       <MessageInput onSend={handleSendMessage} disabled={isLoading || !!error} />
     </div>
   );

@@ -1,13 +1,25 @@
 import { useEffect, useRef } from 'react';
 import { Bot, User } from 'lucide-react';
+import MessageMenu from './MessageMenu';
 import type { Message } from './ChatWindow';
 
 interface MessageListProps {
   messages: Message[];
   isLoading: boolean;
+  onCopyMessage?: (message: Message) => void;
+  onEditMessage?: (messageIndex: number, newContent: string) => void;
+  onDeleteMessage?: (messageIndex: number) => void;
+  onRegenerateMessage?: (messageIndex: number) => void;
 }
 
-function MessageList({ messages, isLoading }: MessageListProps) {
+function MessageList({
+  messages,
+  isLoading,
+  onCopyMessage,
+  onEditMessage,
+  onDeleteMessage,
+  onRegenerateMessage,
+}: MessageListProps) {
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const scrollToBottom = () => {
@@ -29,7 +41,7 @@ function MessageList({ messages, isLoading }: MessageListProps) {
       {messages.map((message, index) => (
         <div
           key={index}
-          className={`flex gap-3 ${
+          className={`flex gap-3 group ${
             message.role === 'user' ? 'justify-end' : 'justify-start'
           }`}
         >
@@ -40,7 +52,7 @@ function MessageList({ messages, isLoading }: MessageListProps) {
           )}
 
           <div
-            className={`max-w-[70%] rounded-lg px-4 py-3 ${
+            className={`max-w-[70%] rounded-lg px-4 py-3 relative group ${
               message.role === 'user'
                 ? 'bg-blue-600 text-white'
                 : 'bg-slate-100 text-slate-800'
@@ -56,8 +68,22 @@ function MessageList({ messages, isLoading }: MessageListProps) {
               </div>
             )}
             {message.content && (
-              <p className="whitespace-pre-wrap break-words">{message.content}</p>
+              <p className="whitespace-pre-wrap break-words pr-8">{message.content}</p>
             )}
+            
+            {/* メニューボタン */}
+            <div className="absolute top-2 right-2">
+              <MessageMenu
+                message={message}
+                messageIndex={index}
+                onCopy={onCopyMessage || (() => {})}
+                onEdit={onEditMessage}
+                onDelete={onDeleteMessage || (() => {})}
+                onRegenerate={onRegenerateMessage}
+                isUserMessage={message.role === 'user'}
+                isLastMessage={index === messages.length - 1}
+              />
+            </div>
           </div>
 
           {message.role === 'user' && (
