@@ -67,6 +67,17 @@ app.use((req, res, next) => {
   next();
 });
 
+// ルートパス（ヘルスチェック用）
+app.get('/', (req, res) => {
+  res.json({
+    status: 'ok',
+    message: 'Dify Chat API Server is running',
+    endpoints: {
+      chat: '/api/chat-messages'
+    }
+  });
+});
+
 // 会話作成エンドポイントは削除（Dify APIは会話IDを自動生成するため不要）
 // チャットメッセージ送信時に会話IDが返ってくる
 
